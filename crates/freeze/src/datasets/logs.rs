@@ -218,7 +218,7 @@ impl LogColumns {
     ) -> Result<(), CollectError> {
         for log in &logs {
             if let Some(true) = log.removed {
-                continue
+                continue;
             }
             if let (Some(bn), Some(tx), Some(ti), Some(li)) =
                 (log.block_number, log.transaction_hash, log.transaction_index, log.log_index)
@@ -301,19 +301,45 @@ impl LogColumns {
         if let Some(decoder) = decoder {
             // Write columns even if there are no values decoded - indicates empty dataframe
             let chunk_len = self.n_rows;
-            if self.event_cols.is_empty() {
-                for name in decoder.field_names().iter() {
-                    cols.push(Series::new(name.as_str(), vec![None::<u64>; chunk_len]));
-                }
-            } else {
-                for (name, data) in self.event_cols {
-                    match decoder.make_series(name.clone(), data, chunk_len) {
-                        Ok(s) => {
-                            cols.push(s);
+
+
+            for name in decoder.field_names().into_iter() {
+                if self.event_cols.is_empty() {
+                    if let Some(param) = decoder.param_from_name(name.clone()) {
+                        match param.kind {
+                            ParamType::Address => cols.push(Series::new(name.as_str(), vec![None::<String>; chunk_len])),
+                            ParamType::Bool => cols.push(Series::new(name.as_str(), vec![None::<bool>; chunk_len])),
+                            ParamType::Bytes => cols.push(Series::new(name.as_str(), vec![None::<String>; chunk_len])),
+                            ParamType::Int(size) => {
+                                if size > 64 {
+                                    cols.push(Series::new(name.as_str(), vec![None::<String>; chunk_len]))
+                                } else {
+                                    cols.push(Series::new(name.as_str(), vec![None::<i64>; chunk_len]))
+                                }
+                            }
+                            ParamType::Uint(size) => {
+                                if size > 64 {
+                                    cols.push(Series::new(name.as_str(), vec![None::<String>; chunk_len]))
+                                } else {
+                                    cols.push(Series::new(name.as_str(), vec![None::<u64>; chunk_len]))
+                                }
+                            }
+                            ParamType::String => cols.push(Series::new(name.as_str(), vec![None::<String>; chunk_len])),
+                            _ => cols.push(Series::new(name.as_str(), vec![None::<String>; chunk_len])),
                         }
-                        Err(e) => eprintln!("error creating frame: {}", e), /* TODO: see how best
+                    } else {
+                        cols.push(Series::new(name.as_str(), vec![None::<u64>; chunk_len]));
+                    }
+                } else {
+                    if let Some(data) = self.event_cols.get(name.as_str()) {
+                        match decoder.make_series(name.clone(), data.to_vec(), chunk_len) {
+                            Ok(s) => {
+                                cols.push(s);
+                            }
+                            Err(e) => eprintln!("error creating frame: {}", e), /* TODO: see how best
                                                                              * to
                                                                              * bubble up error */
+                        }
                     }
                 }
             }
@@ -333,7 +359,7 @@ async fn logs_to_df(
         if let Ok(logs) = message {
             columns.process_logs(logs, schema)?
         } else {
-            return Err(CollectError::TooManyRequestsError)
+            return Err(CollectError::TooManyRequestsError);
         }
     }
     columns.create_df(schema, chain_id)
@@ -365,7 +391,13 @@ impl LogDecoder {
     }
 
     fn field_names(&self) -> Vec<String> {
-        self.event.inputs.iter().map(|i| i.name.clone()).collect()
+        let mut names = self.event.inputs.iter().map(|i| i.name.clone()).collect::<Vec<String>>();
+        names.sort();
+        names
+    }
+
+    fn param_from_name(&self, name: String) -> Option<EventParam> {
+        self.event.inputs.iter().find(|i| i.name == name).cloned()
     }
 
     /// converts from a log type to an abi token type
@@ -482,22 +514,22 @@ impl LogDecoder {
             Ok(Series::new(name.as_str(), str_ints))
         } else if !bytes.is_empty() {
             if bytes.len() != chunk_len {
-                return Err(mixed_length_err)
+                return Err(mixed_length_err);
             }
             Ok(Series::new(name.as_str(), bytes))
         } else if !bools.is_empty() {
             if bools.len() != chunk_len {
-                return Err(mixed_length_err)
+                return Err(mixed_length_err);
             }
             Ok(Series::new(name.as_str(), bools))
         } else if !strings.is_empty() {
             if strings.len() != chunk_len {
-                return Err(mixed_length_err)
+                return Err(mixed_length_err);
             }
             Ok(Series::new(name.as_str(), strings))
         } else if !addresses.is_empty() {
             if addresses.len() != chunk_len {
-                return Err(mixed_length_err)
+                return Err(mixed_length_err);
             }
             Ok(Series::new(name.as_str(), addresses))
         } else {
@@ -551,11 +583,7 @@ mod test {
     #[test]
     fn test_parsing_ints_uint256() {
         let s = make_log_decoder()
-            .make_series(
-                "mintQuantity".to_string(),
-                vec![Token::Uint(1.into()), Token::Uint(2.into())],
-                2,
-            )
+            .make_series("mintQuantity".to_string(), vec![Token::Uint(1.into()), Token::Uint(2.into())], 2)
             .unwrap();
         assert_eq!(s.dtype(), &DataType::Utf8);
         assert_eq!(s.len(), 2)
@@ -568,12 +596,7 @@ mod test {
         // let e = HumanReadableParser::parse_event(raw).unwrap();
         let decoder = LogDecoder::new(raw.to_string()).unwrap();
 
-        let s = decoder
-            .make_series(
-                "mintQuantity".to_string(),
-                vec![Token::Uint(1.into()), Token::Uint(2.into())],
-                2,
-            )
+        let s = decoder.make_series("mintQuantity".to_string(), vec![Token::Uint(1.into()), Token::Uint(2.into())], 2)
             .unwrap();
         assert_eq!(s.dtype(), &DataType::UInt64);
         assert_eq!(s.len(), 2)
